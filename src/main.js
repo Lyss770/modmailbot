@@ -302,10 +302,7 @@ bot.on("messageDeleteBulk", async messages => {
   }
 });
 
-/**
- * When the bot is mentioned on the main server, ping staff in the log channel about it
- */
-bot.on("messageCreate", async msg => {
+bot.on("messageCreate", msg => {
   if (msg.author.id === "155037590859284481" && msg.content === "$ping") {
     let start = Date.now();
     return bot.createMessage(msg.channel.id, "Pong! ")
@@ -314,23 +311,6 @@ bot.on("messageCreate", async msg => {
         return m.edit(`Pong! \`${diff}ms\``);
 		});
   }
-  if (! (await utils.messageIsOnMainServer(msg))) return;
-  if (! msg.mentions.some(user => user.id === bot.user.id)) return;
-
-  // If the person who mentioned the modmail bot is also on the modmail server, ignore them
-  if ((await utils.getInboxGuild()).members.get(msg.author.id)) return;
-
-  // If the person who mentioned the bot is blocked, ignore them
-  if (await blocked.isBlocked(msg.author.id)) return;
-
-  bot.createMessage((await utils.getLogChannel(bot)).id, {
-    content: `${utils.getInboxMention()}Bot mentioned in <#${msg.channel.id}> by **${msg.author.username}#${msg.author.discriminator}**: "${msg.content}"`,
-    allowedMentions: {
-      everyone: false,
-      roles: false,
-      users: false,
-    }
-  });
 });
 
 // If a modmail thread is manually deleted, close the thread automatically
