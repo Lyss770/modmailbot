@@ -575,7 +575,14 @@ class Thread {
      */
     const channel = bot.getChannel(this.channel_id);
     if (channel) {
+      if (this.isPrivate && channel.parentID == config.newThreadCategoryId) {
+        this.makePublic();
+      } else if (! this.isPrivate && channel.parentID != config.newThreadCategoryId) {
+        this.makePrivate();
+      }
+
       console.log(`Deleting channel ${this.channel_id}`);
+
       await channel.delete("Thread closed");
     }
   }
@@ -678,6 +685,28 @@ class Thread {
           });
       }
     }
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async makePrivate() {
+    return await knex("threads")
+      .where("id", this.id)
+      .update({
+        isPrivate: true
+      });
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async makePublic() {
+    return await knex("threads")
+      .where("id", this.id)
+      .update({
+        isPrivate: false
+      });
   }
 
   /**
