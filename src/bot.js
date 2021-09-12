@@ -1,6 +1,5 @@
 const Eris = require("eris");
 const config = require("./config");
-const utils = require("./utils");
 
 const bot = new Eris.CommandClient("Bot " + config.token, {
   getAllUsers: true,
@@ -27,3 +26,5 @@ const bot = new Eris.CommandClient("Bot " + config.token, {
 });
 
 module.exports = bot;
+
+const utils = require("./utils");
