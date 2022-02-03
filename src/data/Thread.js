@@ -14,6 +14,7 @@ const ThreadMessage = require("./ThreadMessage");
 
 const {THREAD_MESSAGE_TYPE, THREAD_STATUS} = require("./constants");
 const notes = require("./notes");
+const lastMsgs = new Map();
 
 /**
  * @property {String} id
@@ -99,72 +100,8 @@ class Thread {
       body: logContent,
       is_anonymous: (isAnonymous ? 1 : 0),
       dm_message_id: dmMessage.id,
-      thread_message_id: threadMessage.id,
+      thread_message_id: threadMessage.id
     }, sse);
-
-    if (this.scheduled_close_at) {
-      await this.cancelScheduledClose();
-      const systemMessage = await this.postSystemMessage("Cancelling scheduled closing of this thread due to new reply");
-      if (systemMessage) {
-        setTimeout(() => systemMessage.delete(), 30000);
-      }
-    }
-  }
-
-  /**
-   * @param {Eris.Member} moderator
-   * @param {Eris.MessageContent} message
-   * @param {{ _id: any; name: string; _state: number; }} command
-   * @param {Boolean} [isAnonymous=false]
-   * @returns {Promise<void>}
-   */
-  async sendCommandToUser(moderator, message, command, isAnonymous = false) {
-    // Username to reply with
-    let modUsername, logModUsername;
-    const mainRole = this.getMainRole(moderator);
-    const text = `[Command Help: ${command.name}]`;
-
-    if (isAnonymous) {
-      modUsername = (mainRole ? mainRole.name : "Staff");
-      logModUsername = `(Anonymous) (${moderator.user.username}) ${mainRole ? mainRole.name : "Staff"}`;
-    } else {
-      const name = (config.useNicknames ? moderator.nick || moderator.user.username : moderator.user.username);
-      modUsername = (mainRole ? `(${mainRole.name}) ${name}` : name);
-      logModUsername = modUsername;
-    }
-
-    // Build the reply message
-    let threadContent = `**${logModUsername}:** ${text}`;
-    let logContent = text;
-
-    if (config.threadTimestamps) {
-      const timestamp = utils.getTimestamp();
-      threadContent = `[${timestamp}] » ${threadContent}`;
-    }
-
-    // Send the reply DM
-    let dmMessage;
-    try {
-      dmMessage = await this.postToUser(message);
-    } catch (e) {
-      await this.postSystemMessage(`Error while replying to user: ${e.message}`);
-      return;
-    }
-
-    // Send the reply to the modmail thread
-    const threadMessage = await this.postToThreadChannel(threadContent);
-    if (! threadMessage) return; // This will be undefined if the channel is deleted
-
-    // Add the message to the database
-    await this.addThreadMessageToDB({
-      message_type: THREAD_MESSAGE_TYPE.TO_USER,
-      user_id: moderator.id,
-      user_name: logModUsername,
-      body: logContent,
-      is_anonymous: (isAnonymous ? 1 : 0),
-      dm_message_id: dmMessage.id,
-      thread_message_id: threadMessage.id,
-    });
 
     if (this.scheduled_close_at) {
       await this.cancelScheduledClose();
@@ -181,35 +118,49 @@ class Thread {
    * @returns {Promise<void>}
    */
   async receiveUserReply(msg, sse) {
-    let content = msg.content;
-    if (msg.content.trim() === "" && msg.embeds.length) {
-      content = "<message contains embeds>";
+    const extraContent = [];
+    const stickers = msg.stickerItems && msg.stickerItems.map((s) => s.name);
+
+    if (msg.embeds.length) {
+      extraContent.push(`${msg.embeds.length} embed${msg.embeds.length == 1 ? "" : "s"}`);
     }
 
-    let threadContent = `**${msg.author.username}#${msg.author.discriminator}:** ${content}`;
+    if (stickers && stickers.length) {
+      extraContent.push(`${stickers.length} sticker${stickers.length == 1 ? "" : "s"} (${stickers.join(", ")})`);
+    }
+
     let logContent = msg.content;
+
+    if (extraContent.length) {
+      logContent += `\n\n<message contains ${extraContent.join(" & ")}>`;
+    }
+
+    // Prepare attachments, if any
+
+    const attachmentFiles = [];
+
+    if (msg.attachments.length) {
+      for (const attachment of msg.attachments) {
+        await attachments.saveAttachment(attachment);
+
+        // Forward small attachments (<2MB) as attachments, just link to larger ones
+
+        const formatted = "\n\n" + await utils.formatAttachment(attachment);
+
+        logContent += formatted; // Logs always contain the link
+
+        if (config.relaySmallAttachmentsAsAttachments && attachment.size <= 1024 * 1024 * 2) {
+          const file = await attachments.attachmentToFile(attachment);
+          attachmentFiles.push(file);
+        }
+      }
+    }
+
+    let threadContent = `**${msg.author.username}#${msg.author.discriminator}:** ${logContent}`;
 
     if (config.threadTimestamps) {
       const timestamp = utils.getTimestamp(msg.timestamp, "x");
       threadContent = `[**${timestamp}**] « ${threadContent}`;
-    }
-
-    // Prepare attachments, if any
-    let attachmentFiles = [];
-
-    for (const attachment of msg.attachments) {
-      await attachments.saveAttachment(attachment);
-
-      // Forward small attachments (<2MB) as attachments, just link to larger ones
-      const formatted = "\n\n" + await utils.formatAttachment(attachment);
-      logContent += formatted; // Logs always contain the link
-
-      if (config.relaySmallAttachmentsAsAttachments && attachment.size <= 1024 * 1024 * 2) {
-        const file = await attachments.attachmentToFile(attachment);
-        attachmentFiles.push(file);
-      } else {
-        threadContent += formatted;
-      }
     }
 
     const threadMessage = await this.postToThreadChannel(threadContent, attachmentFiles);
@@ -225,12 +176,22 @@ class Thread {
       body: logContent,
       is_anonymous: 0,
       dm_message_id: msg.id,
-      thread_message_id: threadMessage.id,
+      thread_message_id: threadMessage.id
     }, sse);
 
     if (this.alert_users) {
       const alerts = this.alert_users.split(", ")
-        .filter(id => id !== this.scheduled_close_id)
+        .filter(id => {
+          const wait = lastMsgs.get(`${this.id}-${id}`);
+
+          if (wait && Date.now() - wait < 10000) {
+            return false;
+          }
+
+          lastMsgs.set(`${this.id}-${id}`, Date.now());
+
+          return id !== this.scheduled_close_id;
+        })
         .map((id, i, arr) => (i == 0 ? "" : (i == arr.length - 1 ? " and " : ", ")) + `<@${id}>`)
         .join("");
 
@@ -320,7 +281,7 @@ class Thread {
       body: typeof text === "string" ? text : (text.content + text.embed ? " <embed>" : "").trim(),
       is_anonymous: 0,
       dm_message_id: msg.id,
-      thread_message_id: msg.id,
+      thread_message_id: msg.id
     });
 
     // return the message so we can delete it if we want.
@@ -336,7 +297,10 @@ class Thread {
     await this.postToThreadChannel(content, file);
   }
 
-  async sendThreadInfo() {
+  /**
+   * @param {String} topic If the user opened the thread, this will be the label of which ever button they pressed
+   */
+  async sendThreadInfo(topic) {
     const now = Date.now();
     const user = bot.users.get(this.user_id);
     const [
@@ -349,29 +313,45 @@ class Thread {
       notes.get(user.id),
     ]);
 
-    const mainGuildNickname = member && member.nick && `(${member.nick})`;
-    const accountAge = humanizeDuration(now - user.createdAt, {largest: 2});
-    const memberFor = member ? humanizeDuration(now - member.joinedAt, {largest: 2}) : "UNAVAILABLE";
-    const roles = member && member.roles.map((r) => member.guild.roles.get(r)).sort((a, b) => b.position - a.position);
-    const roleList = roles ? roles.map((r) => r.name).join(", ") || "NONE" : "UNAVAILABLE";
-    const coloredRoles = roles && roles.filter((r) => r.color !== 0) || [];
-    const highestColor = coloredRoles[0] && coloredRoles[0].color;
-
     let displayNote = "None";
+
     if (userNotes && userNotes.length) {
       const note = userNotes[userNotes.length - 1];
       displayNote = `${note.note} - [${note.created_at}] (${note.created_by_name})`;
     }
 
+    const mainGuildNickname = member && member.nick && `(${member.nick})`;
+    const accountAge = humanizeDuration(now - user.createdAt, {largest: 2});
+    const memberFor = member ? humanizeDuration(now - member.joinedAt, {largest: 2}) : "Unavailable";
+    const roles = member && member.roles.map((r) => member.guild.roles.get(r)).sort((a, b) => b.position - a.position);
+    const roleList = roles ? roles.map((r) => r.name).join(", ") || "None" : "Unavailable";
+    const coloredRoles = roles && roles.filter((r) => r.color !== 0) || [];
+    const highestColor = coloredRoles[0] && coloredRoles[0].color;
     const fields = [
       {name: "User", value: `${user.username}#${user.discriminator} ${mainGuildNickname || ""}`, inline: true},
       {name: "Account age", value: accountAge, inline: true},
       {name: "Member for", value: memberFor, inline: true},
-      {name: "Thread ID", value: this.id, inline: true},
-      {name: "Logs", value: `${userLogCount}`, inline: true},
-      {name: `Last note (${userNotes.length})`, value: displayNote, inline: false},
-      {name: `Roles (${roles && roles.length || 0})`, value: roleList, inline: false},
+      {name: `Thread ID (${userLogCount} Logs)`, value: this.id, inline: true}
     ];
+
+    if (topic) {
+      fields.push({
+        name: "Topic",
+        value: topic,
+        inline: true
+      });
+    }
+
+    fields.push(
+      {
+        name: `Last note (${userNotes.length})`,
+        value: displayNote
+      },
+      {
+        name: `Roles (${roles && roles.length || 0})`,
+        value: roleList
+      }
+    );
 
     await this.postSystemMessage({
       content: user.mention,
@@ -397,7 +377,7 @@ class Thread {
       body: msg.content,
       is_anonymous: 0,
       dm_message_id: msg.id,
-      thread_message_id: msg.id,
+      thread_message_id: msg.id
     }, sse);
   }
 
@@ -414,7 +394,7 @@ class Thread {
       body: msg.content,
       is_anonymous: 0,
       dm_message_id: msg.id,
-      thread_message_id: msg.id,
+      thread_message_id: msg.id
     }, sse);
   }
 
@@ -464,12 +444,13 @@ class Thread {
    * @returns {Promise<void>}
    */
   async addThreadMessageToDB(data, sse) {
-    let threadMessage = {
+    const threadMessage = {
       thread_id: this.id,
       created_at: moment.utc().format("YYYY-MM-DD HH:mm:ss"),
       is_anonymous: 0,
       ...data
     };
+
     await knex("thread_messages").insert(threadMessage);
 
     if (sse) {

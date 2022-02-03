@@ -37,11 +37,12 @@ async function findOpenThreadByUserId(userId) {
 /**
  * Creates a new modmail thread for the specified user
  * @param {Eris.User} user
+ * @param {String} topic If the user opened the thread, this will be the label of which ever button they pressed
  * @param {Boolean} quiet If true, doesn't ping mentionRole or reply with responseMessage
  * @returns {Promise<Thread>}
  * @throws {Error}
  */
-async function createNewThreadForUser(user, quiet = false) {
+async function createNewThreadForUser(user, topic, quiet = false) {
   const existingThread = await findOpenThreadByUserId(user.id);
   if (existingThread) {
     throw new Error("Attempted to create a new thread for a user with an existing open thread!");
@@ -85,7 +86,7 @@ async function createNewThreadForUser(user, quiet = false) {
     }
   }
 
-  await newThread.sendThreadInfo().catch((e) => process.emit("unhandledRejection", e));
+  await newThread.sendThreadInfo(topic).catch((e) => process.emit("unhandledRejection", e));
 
   // Return the thread
   return newThread;
@@ -159,9 +160,9 @@ async function getClosedThreadsByUserId(userId) {
 
 async function deleteClosedThreadsByUserId(userId) {
   await knex("threads")
-      .where("status", THREAD_STATUS.CLOSED)
-      .where("user_id", userId)
-      .delete();
+    .where("status", THREAD_STATUS.CLOSED)
+    .where("user_id", userId)
+    .delete();
 }
 
 /**

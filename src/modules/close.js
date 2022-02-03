@@ -58,16 +58,18 @@ module.exports = (bot, sse) => {
         // Cancel timed close
         if (thread.scheduled_close_at) {
           await thread.cancelScheduledClose();
-          thread.postSystemMessage("Cancelled scheduled closing");
+          thread.postSystemMessage("Cancelled scheduled closing.");
+        } else {
+          thread.postSystemMessage("This thread is not scheduled to close!");
         }
 
         return;
       } else if (args[0] === "status") {
         let message;
         if (thread.scheduled_close_at) {
-          message = `Thread scheduled to close\nClosing at ${thread.scheduled_close_at}\nClosing by ${thread.scheduled_close_name} (${thread.scheduled_close_id})`;
+          message = `Closing at <t:${moment(thread.scheduled_close_at).unix()}:F>\nClosing by ${thread.scheduled_close_name} (${thread.scheduled_close_id})`;
         } else {
-          message = "Thread is not scheduled to close";
+          message = "This thread is not scheduled to close!";
         }
         thread.postSystemMessage(message);
         return;
@@ -80,11 +82,22 @@ module.exports = (bot, sse) => {
         return;
       }
 
-      const closeAt = moment.utc().add(delay, "ms");
-      await thread.scheduleClose(closeAt.format("YYYY-MM-DD HH:mm:ss"), msg.author);
-      thread.postSystemMessage(`Thread is now scheduled to be closed in ${humanizeDelay(delay)}. Use \`${config.prefix}close cancel\` to cancel.`);
+      let closeMsg = "Thread is now scheduled to be closed in ";
+      if (delay === 314000) { // Pi easter egg
+        if (msg.author.id !== "334093318818627586") {
+          thread.postSystemMessage("Invalid delay specified. Only Pi can set a thread to close for 314 seconds!");
+          return;
+        }
 
-      return;
+        closeMsg += "π * 100 seconds";
+      } else {
+        closeMsg += humanizeDelay(delay);
+      }
+
+      const closeAt = moment.utc().add(delay, "ms");
+
+      await thread.scheduleClose(closeAt.format("YYYY-MM-DD HH:mm:ss"), msg.author);
+      return thread.postSystemMessage(`${closeMsg}. Use \`${config.prefix}close cancel\` to cancel.`);
     }
 
     // Regular close

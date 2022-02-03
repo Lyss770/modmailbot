@@ -12,8 +12,6 @@ const reply = require("./modules/reply");
 const alert = require("./modules/alert");
 const role = require("./modules/role");
 const purge = require("./modules/purge");
-const tags = require("./modules/tags");
-const command = require("./modules/command");
 const close = require("./modules/close");
 const snippets = require("./modules/snippets");
 const logs = require("./modules/logs");
@@ -30,19 +28,21 @@ const notes = require("./modules/notes");
 const idcmd = require("./modules/id");
 const ping = require("./modules/ping");
 const fixAttachment = require("./modules/img");
-const git = require("./modules/git");
+const exec = require("./modules/exec");
 const restart = require("./modules/restart");
 const info = require("./modules/info");
 const setavatar = require("./modules/setavatar");
 const dmlink = require("./modules/dmlink");
 const stats = require("./modules/stats");
-const error = require("./modules/error");
+const say = require("./modules/say");
+const modformat = require("./modules/modformat");
 
 const attachments = require("./data/attachments");
 const {ACCIDENTAL_THREAD_MESSAGES} = require("./data/constants");
 const { mainGuildId } = require("./config");
 
 const messageQueue = new Queue();
+const awaitingOpen = new Map();
 const sse = new SSE();
 let webInit = false;
 
@@ -99,9 +99,8 @@ bot.on("error", (e) => process.emit("unhandledRejection", e, Promise.resolve()))
  * 2) If alwaysReply is disabled, save that message as a chat message in the thread
  */
 bot.on("messageCreate", async msg => {
-  if (! msg.guildID) return;
+  if (! msg.guildID || msg.author.bot) return;
   if (! (await utils.messageIsOnInboxServer(msg))) return;
-  if (msg.author.bot) return;
   if (! utils.isStaff(msg.member)) return; // Only run if messages are sent by moderators to avoid a ridiculous number of DB calls
 
   const thread = await threads.findByChannelId(msg.channel.id);
@@ -115,7 +114,7 @@ bot.on("messageCreate", async msg => {
     // AUTO-REPLY: If config.alwaysReply is enabled, send all chat messages in thread channels as replies
 
     if (msg.attachments.length) await attachments.saveAttachmentsInMessage(msg);
-    await thread.replyToUser(msg.member, msg.content.trim(), msg.attachments, config.alwaysReplyAnon || false, sse);
+    await thread.replyToUser(msg.member, msg.content.trim(), msg.attachments, config.alwaysReplyAnon, sse);
     msg.delete();
   } else {
     // Otherwise just save the messages as "chat" in the logs
@@ -129,19 +128,38 @@ bot.on("messageCreate", async msg => {
  * 2) Post the message as a user reply in the thread
  */
 bot.on("messageCreate", async msg => {
-  if (! (msg.channel instanceof Eris.PrivateChannel)) return;
-  if (msg.author.bot) return;
-  if (msg.type !== 0) return; // Ignore pins etc.
+  if (msg.author.bot || msg.type !== 0) return; // Ignore bots & pins
+  if (msg.guildID) return; // Ignore messages sent to a guild
 
-  if (await blocked.isBlocked(msg.author.id)) return;
+  const isBlocked = await blocked.isBlocked(msg.author.id);
 
-  if (msg.content.length > 1900) return bot.createMessage(msg.channel.id, `Your message is too long to be recieved by Dave. (${msg.content.length}/1900)`);
+  if (isBlocked) return;
+  if (msg.content.length > 1900) return bot.createMessage(msg.channel.id, `Your message is too long to be recieved by Dave. Please shorten it! (${msg.content.length}/1900)`);
+
   // Private message handling is queued so e.g. multiple message in quick succession don't result in multiple channels being created
+
   messageQueue.add(async () => {
     let thread = await threads.findOpenThreadByUserId(msg.author.id);
 
     // New thread
     if (! thread) {
+      const opening = awaitingOpen.get(msg.channel.id);
+
+      if (opening) {
+        const timestamp = Date.now();
+
+        if (timestamp - opening.timestamp > 300000) {
+          awaitingOpen.delete(msg.channel.id);
+        } else {
+          if (timestamp - opening.lastWarning < 10000) return;
+
+          opening.lastWarning = timestamp;
+          awaitingOpen.set(msg.channel.id, opening);
+
+          return bot.createMessage(msg.channel.id, "Please press one of the options provided before sending anymore messages!");
+        }
+      }
+
       // Ignore messages that shouldn't usually open new threads, such as "ok", "thanks", etc.
       if (config.ignoreAccidentalThreads && msg.content && ACCIDENTAL_THREAD_MESSAGES.includes(msg.content.trim().toLowerCase())) return;
 
@@ -209,22 +227,100 @@ bot.on("messageCreate", async msg => {
         }
       }
 
-      try {
-        thread = await threads.createNewThreadForUser(msg.author);
-      } catch (error) {
-        if (error.code === 50035 && error.message.includes("words not allowed")) {
-          utils.postLog(`Tried to open a thread with ${msg.author.username}#${msg.author.discriminator} (${msg.author.id}) but failed due to a restriction on channel names for servers in Server Discovery`);
-          return msg.channel.createMessage("Thread was unable to be opened - please change your username and try again!");
-        }
-        utils.postLog(`**Error:** \`\`\`js\nError creating modmail channel for ${msg.author.username}#${msg.author.discriminator}!\n${error.stack}\n\`\`\``);
-        return msg.channel.createMessage("Thread was unable to be opened due to an unknown error. If this persists, please contact a member of the staff team!");
-      }
+      awaitingOpen.set(msg.channel.id, msg);
 
-      sse.send({ thread }, "threadOpen");
+      const payload = {
+        content: config.openingMessage,
+        components: [{
+          type: 1,
+          components: [
+            {
+              type: 2,
+              custom_id: "dynoSupport",
+              style: 1,
+              label: "Dyno Support"
+            },
+            {
+              type: 2,
+              custom_id: "premiumSupport",
+              style: 1,
+              label: "Premium/Payment Issues"
+            },
+            {
+              type: 2,
+              custom_id: "reportUser",
+              style: 1,
+              label: "Report a User"
+            },
+            {
+              type: 2,
+              custom_id: "noFuckingClue",
+              style: 1,
+              label: "Other"
+            },
+            {
+              type: 2,
+              custom_id: "cancelThread",
+              style: 4,
+              label: "Cancel Thread"
+            }
+          ]
+        }]
+      };
+
+      return bot.createMessage(msg.channel.id, payload);
     }
 
     await thread.receiveUserReply(msg, sse);
   });
+});
+
+bot.on("interactionCreate", async (interaction) => {
+  if (! interaction || ! interaction.data) return;
+
+  const { message } = interaction;
+  const opening = awaitingOpen.get(message.channel.id);
+
+  if (! opening || Date.now() - opening.timestamp > 300000) return;
+
+  bot.editMessage(message.channel.id, message.id, {
+    content: message.content,
+    components: [{
+      type: 1,
+      components: message.components[0].components.map((c) => {
+        c.disabled = true;
+        c.style = c.custom_id === interaction.data.custom_id ? 1 : 2;
+        return c;
+      })
+    }]
+  });
+
+  if (interaction.data.custom_id === "cancelThread") {
+    interaction.createMessage("Cancelled thread, your message won't be forwarded to staff members.");
+  } else if (interaction.data.custom_id === "dynoSupport") {
+    interaction.createMessage("You can get Dyno support in the server in the following channels:\n<#240777175802839040> English support\n<#395821744696590338> Soutien en français\n<#395821762669051904> Internationale Unterstützung / Suporte internacional / Apoyo internacional / Uluslararası destek / الدعم الدولي");
+  } else {
+    let thread;
+    let clicked = message.components[0].components.find((c) => c.custom_id === interaction.data.custom_id);
+
+    try {
+      thread = await threads.createNewThreadForUser(opening.author, clicked.label);
+      await interaction.acknowledge();
+    } catch (error) {
+      awaitingOpen.delete(message.channel.id);
+      if (error.code === 50035 && error.message.includes("words not allowed")) {
+        utils.postLog(`Tried to open a thread with ${opening.author.username}#${opening.author.discriminator} (${opening.author.id}) but failed due to a restriction on channel names for servers in Server Discovery`);
+        return interaction.createMessage("Thread was unable to be opened - please change your username and try again!");
+      }
+      utils.postLog(`**Error:** \`\`\`js\nError creating modmail channel for ${opening.author.username}#${opening.author.discriminator}!\n${error.stack}\n\`\`\``);
+      return interaction.createMessage("Thread was unable to be opened due to an unknown error. If this persists, please contact a member of the staff team!");
+    }
+
+    sse.send({ thread }, "threadOpen");
+    await thread.receiveUserReply(opening, sse);
+  }
+
+  awaitingOpen.delete(message.channel.id);
 });
 
 /**
@@ -233,9 +329,7 @@ bot.on("messageCreate", async msg => {
  * 2) If that message was moderator chatter in the thread, update the corresponding chat message in the DB
  */
 bot.on("messageUpdate", async (msg, oldMessage) => {
-  if (! msg || ! msg.author) return;
-  if (! (msg.channel instanceof Eris.PrivateChannel) || ! (await utils.messageIsOnInboxServer(msg)) && utils.isStaff(msg.member)) return;
-  if (msg.author.bot) return;
+  if (! msg || ! msg.author || msg.author.bot) return;
   if (await blocked.isBlocked(msg.author.id)) return;
   if (msg.content.length > 1900) return bot.createMessage(msg.channel.id, `Your edited message (<${utils.discordURL("@me", msg.channel.id, msg.id)}>) is too long to be recieved by Dave. (${msg.content.length}/1900)`);
 
@@ -247,7 +341,7 @@ bot.on("messageUpdate", async (msg, oldMessage) => {
   if (newContent.trim() === oldContent.trim()) return;
 
   // 1) Edit in DMs
-  if (msg.channel instanceof Eris.PrivateChannel) {
+  if (! msg.guildID) {
     const thread = await threads.findOpenThreadByUserId(msg.author.id);
     const oldThreadMessage = await thread.getThreadMessageFromDM(msg);
     const editMessage = `**EDITED <${utils.discordURL(mainGuildId, thread.channel_id, oldThreadMessage.thread_message_id)}>:**\n${newContent}`;
@@ -308,10 +402,10 @@ bot.on("messageCreate", msg => {
   if (msg.author.id === "155037590859284481" && msg.content === "$ping") {
     let start = Date.now();
     return bot.createMessage(msg.channel.id, "Pong! ")
-    .then(m => {
+      .then(m => {
         let diff = (Date.now() - start);
         return m.edit(`Pong! \`${diff}ms\``);
-		});
+      });
   }
 });
 
@@ -344,8 +438,6 @@ module.exports = {
     alert(bot);
     role(bot);
     purge(bot);
-    tags(bot);
-    command(bot);
     close(bot, sse);
     logs(bot);
     hide(bot);
@@ -361,12 +453,13 @@ module.exports = {
     idcmd(bot);
     ping(bot);
     fixAttachment(bot);
-    git(bot);
+    exec(bot);
     restart(bot);
     info(bot);
     setavatar(bot);
     dmlink(bot);
     stats(bot);
-    error(bot);
+    say(bot);
+    modformat(bot);
   }
 };
