@@ -1,4 +1,4 @@
-const utils = require("../utils");
+const utils = require("../utils/utils");
 
 /**
  * @property {String} user_id
@@ -6,6 +6,7 @@ const utils = require("../utils");
  * @property {String} created_by_id
  * @property {String} created_by_name
  * @property {String} created_at
+ * @property {String} thread
  */
 
 class Note {

@@ -5,14 +5,15 @@ const humanizeDuration = require("humanize-duration");
 
 const bot = require("../bot");
 const knex = require("../knex");
-const utils = require("../utils");
+const utils = require("../utils/utils");
 const config = require("../config");
 const attachments = require("./attachments");
 const threads = require("./threads");
 
 const ThreadMessage = require("./ThreadMessage");
 
-const {THREAD_MESSAGE_TYPE, THREAD_STATUS} = require("./constants");
+const {THREAD_MESSAGE_TYPE, THREAD_STATUS} = require("../utils/constants");
+const {internalButtons} = require("../utils/components");
 const notes = require("./notes");
 const lastMsgs = new Map();
 
@@ -46,14 +47,15 @@ class Thread {
   async replyToUser(moderator, text, replyAttachments = [], isAnonymous = false, sse) {
     // Username to reply with
     let modUsername, logModUsername;
-    const mainRole = this.getMainRole(moderator);
+    let channel = moderator.guild && moderator.guild.channels && moderator.guild.channels.get(this.channel_id);
+    let mainRole = this.getMainRole(moderator, channel?.parentID);
 
     if (isAnonymous) {
-      modUsername = (mainRole ? mainRole.name : "Staff");
-      logModUsername = `(${moderator.user.username}) ${mainRole ? mainRole.name : "Staff"}`;
+      modUsername = mainRole.name;
+      logModUsername = `(${moderator.user.username}) ${modUsername}`;
     } else {
       const name = (config.useNicknames ? moderator.nick || moderator.user.username : moderator.user.username);
-      modUsername = (mainRole ? `(${name}) ${mainRole.name}` : name);
+      modUsername = `(${name}) ${mainRole.name}`;
       logModUsername = modUsername;
     }
 
@@ -278,7 +280,7 @@ class Thread {
       message_type: THREAD_MESSAGE_TYPE.SYSTEM,
       user_id: null,
       user_name: "",
-      body: typeof text === "string" ? text : (text.content + text.embed ? " <embed>" : "").trim(),
+      body: typeof text === "string" ? text : (text.content + (text.embed ? "\n\n<embed>" : "")).trim(),
       is_anonymous: 0,
       dm_message_id: msg.id,
       thread_message_id: msg.id
@@ -323,10 +325,6 @@ class Thread {
     const mainGuildNickname = member && member.nick && `(${member.nick})`;
     const accountAge = humanizeDuration(now - user.createdAt, {largest: 2});
     const memberFor = member ? humanizeDuration(now - member.joinedAt, {largest: 2}) : "Unavailable";
-    const roles = member && member.roles.map((r) => member.guild.roles.get(r)).sort((a, b) => b.position - a.position);
-    const roleList = roles ? roles.map((r) => r.name).join(", ") || "None" : "Unavailable";
-    const coloredRoles = roles && roles.filter((r) => r.color !== 0) || [];
-    const highestColor = coloredRoles[0] && coloredRoles[0].color;
     const fields = [
       {name: "User", value: `${user.username}#${user.discriminator} ${mainGuildNickname || ""}`, inline: true},
       {name: "Account age", value: accountAge, inline: true},
@@ -342,6 +340,10 @@ class Thread {
       });
     }
 
+    const roles = member && member.roles.map((r) => member.guild.roles.get(r)).sort((a, b) => b.position - a.position);
+    const coloredRoles = roles && roles.filter((r) => r.color !== 0) || [];
+    const highestColor = coloredRoles[0] && coloredRoles[0].color;
+
     fields.push(
       {
         name: `Last note (${userNotes.length})`,
@@ -349,11 +351,11 @@ class Thread {
       },
       {
         name: `Roles (${roles && roles.length || 0})`,
-        value: roleList
+        value: roles ? roles.map((r) => r.name).join(", ") || "None" : "Unavailable"
       }
     );
 
-    await this.postSystemMessage({
+    const data = {
       content: user.mention,
       embed: {
         fields,
@@ -361,7 +363,15 @@ class Thread {
         timestamp: new Date(),
         color: highestColor || 0x337FD5,
       }
-    });
+    };
+
+    // Only add the buttons if a topic is provided!
+
+    if (topic) {
+      data.components = internalButtons;
+    }
+
+    return await this.postSystemMessage(data);
   }
 
   /**
@@ -702,13 +712,14 @@ class Thread {
 
   /**
    * @param {Eris.Member} member
-   * @returns {String?}
+   * @param {String} categoryID
+   * @returns {Eris.Role}
    */
-  getMainRole(member) {
-    let role = this.getStaffRoleOverride(member.id);
+  getMainRole(member, categoryID) {
+    const role = this.getStaffRoleOverride(member.id);
+    const guild = member.guild;
 
     if (role) {
-      const guild = member.guild;
       const override = guild && guild.roles && guild.roles.get(role);
 
       if (override) {
@@ -716,7 +727,22 @@ class Thread {
       }
     }
 
-    return utils.getMainRole(member);
+    if (categoryID) {
+      const adminOverrides = { // These hard-coded IDs are temp
+        "429054322555355158": "203040224597508096",
+        "842139696313139309": "523021576128692239"
+      };
+  
+      if (adminOverrides[categoryID]) {
+        const role = guild && guild.roles && guild.roles.get(adminOverrides[categoryID]);
+  
+        if (role) {
+          return role;
+        }
+      }
+    }
+
+    return { name: "Staff" };
   }
 
   /**

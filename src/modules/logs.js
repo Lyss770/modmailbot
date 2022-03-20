@@ -1,8 +1,8 @@
 const Eris = require("eris");
-const threadUtils = require("../threadUtils");
-const threads = require("../data/threads");
 const moment = require("moment");
-const utils = require("../utils");
+const threads = require("../data/threads");
+const threadUtils = require("../utils/threadUtils");
+const utils = require("../utils/utils");
 
 /**
  * @param {Eris.CommandClient} bot
@@ -76,8 +76,15 @@ module.exports = bot => {
     return getLogs(userId);
   });
 
-  threadUtils.addInboxServerCommand(bot, "loglink", async (msg, args, thread) => {
+  bot.registerCommand("loglink", async (msg, args) => {
+    if (! (await utils.messageIsOnInboxServer(msg))) return;
+    if (! utils.isStaff(msg.member)) return;
+
+    if (args[0]) return msg.channel.createMessage(utils.getSelfUrl(`#thread/${args[0]}`));
+
+    const thread = await threads.findOpenThreadByChannelId(msg.channel.id);
     if (! thread) return;
+
     const logUrl = await thread.getLogUrl();
     thread.postSystemMessage(`Log URL: <${logUrl}>`);
   });

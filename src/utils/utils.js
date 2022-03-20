@@ -1,9 +1,9 @@
 const Eris = require("eris");
-const bot = require("./bot");
 const moment = require("moment");
 const publicIp = require("public-ip");
-const attachments = require("./data/attachments");
-const config = require("./config");
+const bot = require("../bot");
+const config = require("../config");
+const attachments = require("../data/attachments");
 
 class BotError extends Error {}
 
@@ -193,17 +193,6 @@ async function getSelfUrl(path = "") {
 }
 
 /**
- * Returns the highest hoisted role of the given member
- * @param {Eris.Member} member
- * @returns {Eris.Role}
- */
-function getMainRole(member) {
-  const roles = member.roles.map(id => member.guild.roles.get(id));
-  roles.sort((a, b) => a.position > b.position ? -1 : 1);
-  return roles.find(r => r.hoist);
-}
-
-/**
  * Splits array items into chunks of the specified size
  * @param {Array} items
  * @param {Number} chunkSize
@@ -311,6 +300,23 @@ function discordURL(guildID, channelID, messageID) {
   return `https://discord.com/channels/${guildID}/${channelID}/${messageID}`;
 }
 
+function paginate(items, nPerPage) {
+  if (! items || ! items.length) throw new RangeError("Expected an array with elements");
+
+  const chunks = [[]];
+  let index = 0;
+
+  for (const i of items) {
+    if (chunks[index].length >= nPerPage) {
+      index++;
+      chunks.push([]);
+    }
+    chunks[index].push(i);
+  }
+
+  return chunks;
+}
+
 module.exports = {
   BotError,
 
@@ -332,7 +338,6 @@ module.exports = {
   getTimestamp,
   disableLinkPreviews,
   getSelfUrl,
-  getMainRole,
   convertDelayStringToMS,
   getInboxMention,
   postSystemMessageWithFallback,
@@ -343,5 +348,6 @@ module.exports = {
   setDataModelProps,
 
   regEscape,
-  discordURL
+  discordURL,
+  paginate
 };
