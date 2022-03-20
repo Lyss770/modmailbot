@@ -81,7 +81,7 @@ const finalConfig = Object.assign({}, defaultConfig);
 
 for (const [prop, value] of Object.entries(localConfig)) {
   if (! defaultConfig.hasOwnProperty(prop)) {
-    throw new Error(`Invalid option: ${prop}`);
+    //throw new Error(`Invalid option: ${prop}`);
   }
 
   finalConfig[prop] = value;
@@ -94,7 +94,7 @@ for (const [prop, value] of Object.entries(ghConfig)) {
   }
 
   if (! defaultConfig.hasOwnProperty(prop)) {
-    throw new Error(`Invalid option: ${prop}`);
+    //throw new Error(`Invalid option: ${prop}`);
   }
 
   finalConfig[prop] = value;
