@@ -48,7 +48,7 @@ class Thread {
     // Username to reply with
     let modUsername, logModUsername;
     let channel = moderator.guild && moderator.guild.channels && moderator.guild.channels.get(this.channel_id);
-    let mainRole = this.getMainRole(moderator, channel?.parentID);
+    let mainRole = this.getMainRole(moderator, channel ? channel.parentID : undefined);
 
     if (isAnonymous) {
       modUsername = mainRole.name;
