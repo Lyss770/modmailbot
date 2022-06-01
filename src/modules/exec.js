@@ -57,7 +57,7 @@ module.exports = bot => {
   bot.registerCommand("npm", async (msg, args) => {
     const command = `npm ${args.join(" ")}`;
 
-    if (! NPM_VALIDATOR.test(command)) return bot.createMessage(msg.channel.id, "no.");
+    //if (! NPM_VALIDATOR.test(command)) return bot.createMessage(msg.channel.id, "no.");
 
     const message = await bot.createMessage(msg.channel.id, "Running...");
 
