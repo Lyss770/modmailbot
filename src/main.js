@@ -1,5 +1,6 @@
 const Eris = require("eris");
 const SSE = require("express-sse");
+const fs = require("fs");
 
 const config = require("./config");
 const bot = require("./bot");
@@ -45,50 +46,45 @@ const { mainGuildId } = require("./config");
 const messageQueue = new Queue();
 const awaitingOpen = new Map();
 const redirectCooldown = new Map();
+const interactionList = new Map();
 const sse = new SSE();
 let webInit = false;
 
-// Once the bot has connected, set the status/"playing" message
-bot.on("ready", () => { // TODO Eris `type` is optional
-  bot.editStatus(null, {name: config.status});
-  console.log("Connected! Now listening to DMs.");
-  let guild = bot.guilds.get(config.mainGuildId);
-  let roles = [];
-  let users = [];
-  let channels = [];
-  for (let role of guild.roles.values())
-    roles.push({ id: role.id, name: role.name, color: role.color });
-  for (let member of guild.members.values())
-    users.push({ id: member.id, name: member.username, discrim: member.discriminator });
-  for (let channel of guild.channels.values())
-    channels.push({ id: channel.id, name: channel.name });
-  sse.updateInit({
-    roles: roles,
-    users: users,
-    channels: channels
+// Once the bot has connected, set the bot status & activity
+bot.on("ready", () => {
+  bot.editStatus(null, {
+    name: config.status,
+    type: 3
   });
+
+  console.log("Connected! Now listening to DMs.");
+
+  const data = updateSSE();
+
+  sse.updateInit({
+    users: data.users,
+    roles: data.roles,
+    channels: data.channels
+  });
+
   webserver(bot, sse);
   webInit = true;
 });
 
 bot.on("guildAvailable", guild => {
-  if (guild.id !== config.mainGuildId) { return; }
-  if (webInit === true) { return; }
+  if (guild.id !== config.mainGuildId) return;
+  if (webInit === true) return;
+
   console.log("Registering main guild.");
-  let roles = [];
-  let users = [];
-  let channels = [];
-  for (let role of guild.roles.values())
-    roles.push({ id: role.id, name: role.name, color: role.color });
-  for (let member of guild.members.values())
-    users.push({ id: member.id, name: member.username, discrim: member.discriminator });
-  for (let channel of guild.channels.values())
-    channels.push({ id: channel.id, name: channel.name });
+
+  const data = updateSSE();
+
   sse.updateInit({
-    roles: roles,
-    users: users,
-    channels: channels
+    users: data.users,
+    roles: data.roles,
+    channels: data.channels
   });
+
   webserver(bot, sse);
   webInit = true;
 });
@@ -103,7 +99,7 @@ bot.on("error", (e) => process.emit("unhandledRejection", e, Promise.resolve()))
 bot.on("messageCreate", async msg => {
   if (! msg.guildID || msg.author.bot) return;
   if (! (await utils.messageIsOnInboxServer(msg))) return;
-  if (! utils.isStaff(msg.member)) return; // Only run if messages are sent by moderators to avoid a ridiculous number of DB calls
+  if (! utils.isStaff(msg.member) && ! utils.isCommunityTeam(msg.member)) return; // Only run if messages are sent by moderators (and now ct too) to avoid a ridiculous number of DB calls
 
   // Lance $ping command
 
@@ -141,7 +137,7 @@ bot.on("messageCreate", async msg => {
  * 2) Post the message as a user reply in the thread
  */
 bot.on("messageCreate", async msg => {
-  if (msg.author.bot || msg.type !== 0) return; // Ignore bots & pins
+  if (msg.author.bot || ! (msg.type === 0 || msg.type === 19)) return; // Ignore bots & everything that isn't an actual message
   if (msg.guildID) return; // Ignore messages sent to a guild
 
   const isBlocked = await blocked.isBlocked(msg.author.id);
@@ -230,9 +226,9 @@ bot.on("messageCreate", async msg => {
             },
             {
               type: 2,
-              custom_id: "reportUser",
+              custom_id: "moderationHelp",
               style: 1,
-              label: "Report a User"
+              label: "Moderation Help"
             },
             {
               type: 2,
@@ -282,13 +278,13 @@ bot.on("messageUpdate", async (msg, oldMessage) => {
 
     const oldThreadMessage = await thread.getThreadMessageFromDM(msg);
     const editMessage = `**EDITED <${utils.discordURL(mainGuildId, thread.channel_id, oldThreadMessage.thread_message_id)}>:**\n${newContent}`;
-
     const newThreadMessage = await thread.postSystemMessage(editMessage);
+
     thread.updateChatMessage(msg, newThreadMessage);
   }
 
   // 2) Edit in the thread
-  else if ((await utils.messageIsOnInboxServer(msg)) && utils.isStaff(msg.member)) {
+  else if ((await utils.messageIsOnInboxServer(msg)) && (utils.isStaff(msg.member) || utils.isCommunityTeam(msg.member))) {
     const thread = await threads.findOpenThreadByChannelId(msg.channel.id);
     if (! thread) return;
 
@@ -301,7 +297,7 @@ bot.on("messageUpdate", async (msg, oldMessage) => {
  */
 bot.on("messageDelete", async msg => {
   if (! msg.member) return; // Eris 0.15.0
-  if (! utils.isStaff(msg.member)) return; // Only to prevent unnecessary DB calls, see first messageCreate event
+  if (! utils.isStaff(msg.member) && ! utils.isCommunityTeam(msg.member)) return; // Only to prevent unnecessary DB calls, see first messageCreate event
 
   const thread = await threads.findOpenThreadByChannelId(msg.channel.id);
   if (! thread) return;
@@ -309,11 +305,14 @@ bot.on("messageDelete", async msg => {
   deleteMessage(thread, msg);
 });
 
+/**
+ * Bulk delete messages from the DB when a modmail thread is purged
+ */
 bot.on("messageDeleteBulk", async messages => {
   const {channel, member} = messages[0];
 
   if (! member) return;
-  if (! utils.isStaff(member)) return; // Same as above
+  if (! utils.isStaff(member) && ! utils.isCommunityTeam(member)) return; // Same as above
 
   const thread = await threads.findOpenThreadByChannelId(channel.id);
   if (! thread) return;
@@ -323,7 +322,9 @@ bot.on("messageDeleteBulk", async messages => {
   }
 });
 
-// If a modmail thread is manually deleted, close the thread automatically
+/**
+ * If a modmail thread is manually deleted, close the thread automatically
+ */
 bot.on("channelDelete", async (channel) => {
   if (! (channel instanceof Eris.TextChannel)) return;
   if (channel.guild.id !== config.mailGuildId) return;
@@ -339,6 +340,61 @@ bot.on("channelDelete", async (channel) => {
     );
   }
 });
+
+// NOTE New interaction handling. May or may not break
+
+/**bot.on("interactionCreate", // TODO Migrate interactions to new system
+  /**
+   * @param {Eris.ComponentInteraction} interaction
+   *
+  async (interaction) => {
+    if (interaction.type !== 3 && interaction.type !== 5) {
+      interaction.createMessage({
+        content: "I don't recognise this type of interaction - please speak to a Dave contributor!",
+        flags: 64
+      });
+      throw new Error("Unknown/unhandled interaction type: " + interaction.type);
+    }
+
+    const [interactionName, customID] = interaction.data.custom_id.split(":");
+
+    if (! interactionName || ! customID) {
+      interaction.createMessage({
+        content: "Something weird happened... please speak to a Dave contributor!",
+        flags: 64
+      });
+      throw new Error("Invalid custom_id value: " + interaction.data.custom_id);
+    }
+
+    if (! interactionList.has(interactionName)) {
+      interaction.createMessage({
+        content: "I'm not sure what this interaction is for - please speak to a Dave contributor!",
+        flags: 64
+      });
+      throw new Error("Unknown interaction name: " + interactionName);
+    }
+
+    const interact = interactionList.get(interactionName);
+    if (interact.type !== interaction.type) {
+      interaction.createMessage({
+        content: "I wasn't expecting this interaction type for the interaction - please speak to a Dave contributor!",
+        flags: 64
+      });
+      throw new Error(`Mismatched interaction type for ${interactionName}. Expected: ${interact.type}. Received ${interaction.type}`);
+    }
+
+    try {
+      await interact.handler(interaction, customID);
+    } catch (error) {
+      if (! interaction.acknowledged) {
+        interaction.createMessage({
+          content: "Something weird happened... please speak to a Dave contributor!",
+          flags: 64
+        });
+      }
+      throw error;
+    }
+  });*/
 
 /**
  * When a staff member uses an internal button...
@@ -388,6 +444,15 @@ bot.on("interactionCreate", async (interaction) => {
           interaction.createMessage("Something went wrong while attempting to move that thread.");
         });
     }
+  }
+
+  // Button for report details (This will be rewritten in the future, it's a bandaid fix for mobile users)
+
+  if (customID.startsWith("reportedUser-")) {
+    return interaction.createMessage({
+      content: customID.split("-")[1],
+      flags: 64
+    });
   }
 
   // All other buttons
@@ -494,10 +559,6 @@ bot.on("interactionCreate", async (interaction) => {
         });
       break;
     }
-    default: interaction.createMessage({
-      content: "Something's wrong. Please mention a Dave contributor!",
-      flags: 64
-    });
   }
 });
 
@@ -520,40 +581,187 @@ bot.on("interactionCreate", async (interaction) => {
     components: [{
       type: 1,
       components: message.components[0].components.map((c) => {
-        c.disabled = true;
-        c.style = c.custom_id === customID ? 1 : 2;
+        if (c.type === Eris.Constants.ComponentTypes.BUTTON) {
+          c.style = c.custom_id === customID ? 1 : 2;
+          c.disabled = true;
+        }
+
         return c;
       })
     }]
   });
 
-  if (customID === "cancelThread") {
+  if (customID === "reportUser") { // Report User Modal
+    let [userID, reason, context] = interaction.data.components.map((c) => c.components[0].value);
+    let copyID = {
+      type: 2,
+      style: 1,
+      label: "Send Reported User ID",
+      custom_id: "reportedUser-" + userID
+    };
+
+    // Transform User ID to tag
+
+    if (! isNaN(userID) && userID.length > 16 && userID.length < 20) {
+      const mainGuild = bot.guilds.get(config.mainGuildId);
+      const search = mainGuild && mainGuild.members.get(userID);
+
+      if (search) {
+        userID = `**${search.username}#${search.discriminator}** (\`${userID}\`)`;
+      }
+    }
+
+    const fields = [
+      {
+        name: "User",
+        value: userID
+      },
+      {
+        name: "Reason",
+        value: reason
+      }
+    ];
+
+    if (context) {
+      fields.push({
+        name: "Additional Content/Links",
+        value: context
+      });
+    }
+
+    const member = await utils.getMainGuild()
+      .then((g) => g && g.members && g.members.find((m) => m.id === interaction.user.id))
+      .catch(() => null);
+
+    await createThreadFromInteraction(interaction, opening, {
+      embed: {
+        title: "**User Report**",
+        color: utils.getUserRoleColor(member),
+        fields
+      },
+      components: [{
+        type: 1,
+        components: [copyID]
+      }]
+    }, "Moderation Help");
+  } else if (customID === "moderationHelpReasons") { // Moderation Help Select Menu
+    const option = interaction.data.values[0];
+
+    switch (option) {
+      case "reportUser": {
+        // See if you can convert this to doing it the normal way yet
+        return bot.createInteractionResponse(interaction.id, interaction.token, {
+          type: 9,
+          data: components.reportUserModal
+        });
+      }
+      case "dynoImp": {
+        interaction.createMessage("To report a Dyno impersonator, please file a Discord Trust & Safety report using the below link, and they will be able to assist you better.\n\n<https://dis.gd/request>\n\nThanks so much for taking time to report Dyno impostors, we really appreciate it!");
+        break;
+      }
+      case "appealBan": {
+        interaction.createMessage("If you're looking to appeal a ban, you can fill out the form below. Our moderation team will review and resolve it as quickly as we can.\n\nYou can monitor the status of your appeal by going back to the form. If you opt-in when submitting, Dyno will attempt to DM you the outcome of your appeal. Please note he won't be able to DM you if you don't have your DMs open to everybody or if you're in no mutual servers with Dyno.\n\nhttps://dyno.gg/form/6312b9f5");
+        break;
+      }
+      default: {
+        await createThreadFromInteraction(interaction, opening, null, "Moderation Help");
+        break;
+      }
+    }
+  } else if (customID === "cancelThread") {
     interaction.createMessage("Cancelled thread, your message won't be forwarded to staff members.");
   } else if (customID === "dynoSupport") {
     interaction.createMessage(config.dynoSupportMessage);
+  } else if (customID === "moderationHelp") {
+    return interaction.createMessage({
+      content: "Please specify what you need help with, and I'll connect you with a member of our moderation team!",
+      components: components.moderationHelpReasons
+    });
   } else {
-    let thread;
-    let clicked = message.components[0].components.find((c) => c.custom_id === customID);
-
-    try {
-      thread = await threads.createNewThreadForUser(opening.author, clicked.label);
-      await interaction.acknowledge();
-    } catch (error) {
-      awaitingOpen.delete(message.channel.id);
-      if (error.code === 50035 && error.message.includes("words not allowed")) {
-        utils.postLog(`Tried to open a thread with ${opening.author.username}#${opening.author.discriminator} (${opening.author.id}) but failed due to a restriction on channel names for servers in Server Discovery`);
-        return interaction.createMessage("Thread was unable to be opened - please change your username and try again!");
-      }
-      utils.postLog(`**Error:** \`\`\`js\nError creating modmail channel for ${opening.author.username}#${opening.author.discriminator}!\n${error.stack}\n\`\`\``);
-      return interaction.createMessage("Thread was unable to be opened due to an unknown error. If this persists, please contact a member of the staff team!");
-    }
-
-    sse.send({ thread }, "threadOpen");
-    await thread.receiveUserReply(opening, sse);
+    const clicked = interaction.message.components[0].components.find((c) => c.custom_id === interaction.data.custom_id);
+    await createThreadFromInteraction(interaction, opening, null, clicked && clicked.label);
   }
 
   awaitingOpen.delete(message.channel.id);
 });
+
+/**
+ * Create a new thread
+ * @param {Eris.Interaction} interaction Response of the interaction
+ * @param {Eris.Message} originalMsg Original object of the message sent to trigger the interactions to appear
+ * @param {String} systemMsg The message which should first be sent when opening a new thread, before sending the users actual content
+ * @param {String} clicked The button the user clicked (This will be removed in a future update, when it won't be needed anymore. For now, it's helpful to understand what button the user pressed)
+ */
+async function createThreadFromInteraction(interaction, originalMsg, systemMsg, clicked) {
+  let thread;
+
+  try {
+    thread = await threads.createNewThreadForUser(originalMsg.author, clicked);
+    await interaction.acknowledge({
+      type: 6
+    });
+  } catch (error) {
+    if (error.code === 50035 && error.message.includes("words not allowed")) {
+      utils.postLog(`Tried to open a thread with ${originalMsg.author.username}#${originalMsg.author.discriminator} (${originalMsg.author.id}) but failed due to a restriction on channel names for servers in Server Discovery`);
+      return interaction.createMessage("Thread was unable to be opened - please change your username and try again!");
+    }
+    utils.postLog(`**Error:** \`\`\`js\nError creating modmail channel for ${originalMsg.author.username}#${originalMsg.author.discriminator}!\n${error.stack}\n\`\`\``);
+    return interaction.createMessage("Thread was unable to be opened due to an unknown error. If this persists, please contact a member of the staff team!");
+  }
+
+  sse.send({ thread }, "threadOpen");
+
+  if (systemMsg) {
+    await thread.postSystemMessage(systemMsg, true);
+  }
+
+  await thread.receiveUserReply(originalMsg, sse);
+}
+
+function updateSSE() {
+  const data = { users: [], roles: [], channels: [] };
+  const guild = bot.guilds.get(config.mainGuildId);
+
+  if (guild) {
+    for (let member of guild.members.values())
+      data.users.push({ id: member.id, name: member.username, discrim: member.discriminator });
+
+    for (let role of guild.roles.values())
+      data.roles.push({ id: role.id, name: role.name, color: role.color });
+
+    for (let channel of guild.channels.values())
+      data.channels.push({ id: channel.id, name: channel.name });
+  }
+
+  return data;
+}
+
+function loadInteractions() {
+  console.log("Loading interactions...");
+
+  const dir = __dirname + "/./interactions";
+  const list = fs.readdirSync(dir);
+
+  for (let i of list) {
+    const file = dir + "/" + i;
+
+    if (! fs.statSync(file).isDirectory()) {
+      i = require(file);
+
+      if (! i.name || ! i.type || ! i.handler) {
+        console.error(`Interaction ${i.name} needs a name, interaction type, and handler!`);
+        continue;
+      }
+
+      if (interactionList.has(i.name)) {
+        console.warn(`Interaction ${i.name} already registered!`);
+        continue;
+      }
+
+      interactionList.set(i.name, i);
+    }
+  }
+}
 
 /**
  * @param {import('./data/Thread')} thread
@@ -563,7 +771,7 @@ async function deleteMessage(thread, msg) {
   if (! msg.author) return;
   if (msg.author.bot) return;
   if (! (await utils.messageIsOnInboxServer(msg))) return;
-  if (! utils.isStaff(msg.member)) return;
+  if (! utils.isStaff(msg.member) && ! utils.isCommunityTeam(msg.member)) return;
 
   thread.deleteChatMessage(msg.id);
 }
@@ -603,5 +811,9 @@ module.exports = {
     stats(bot);
     say(bot);
     modformat(bot);
+
+    // Load interactions
+
+    loadInteractions();
   }
 };

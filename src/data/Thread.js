@@ -123,7 +123,7 @@ class Thread {
     const extraContent = [];
     const stickers = msg.stickerItems && msg.stickerItems.map((s) => s.name);
 
-    if (msg.embeds.length) {
+    if (msg.embeds && msg.embeds.length) {
       extraContent.push(`${msg.embeds.length} embed${msg.embeds.length == 1 ? "" : "s"}`);
     }
 
@@ -270,12 +270,39 @@ class Thread {
 
   /**
    * @param {Eris.MessageContent} text
-   * @param {Eris.MessageFile|Eris.MessageFile[]} [file]
+   * @param {Boolean} [plainBody] Whether the bot should save a plain text version of an embed (if provided) to the DB
    * @returns {Promise<Eris.Message<Eris.GuildTextableChannel>>}
    */
-  async postSystemMessage(text, file) {
-    const msg = await this.postToThreadChannel(text, file);
+  async postSystemMessage(text, plainBody) {
+    const msg = await this.postToThreadChannel(text);
     if (! msg) return; // This will be undefined if the channel is deleted
+
+    if (plainBody === true && text.embed) {
+      const strings = [];
+      const embed = text.embed;
+
+      if (text.content)
+        strings.push(text.content);
+
+      if (embed.author && embed.author.name)
+        strings.push(embed.author.name);
+
+      if (embed.title)
+        strings.push(embed.title);
+
+      if (embed.description)
+        strings.push(embed.description);
+
+      if (embed.fields)
+        strings.push(embed.fields.map((f) => `**${f.name}:** ${f.value}`).join("\n"));
+
+      if (embed.footer && embed.footer.text)
+        strings.push(embed.footer.text);
+
+      if (strings.length)
+        text = strings.join("\n");
+    }
+
     await this.addThreadMessageToDB({
       message_type: THREAD_MESSAGE_TYPE.SYSTEM,
       user_id: null,
@@ -341,8 +368,7 @@ class Thread {
     }
 
     const roles = member && member.roles.map((r) => member.guild.roles.get(r)).sort((a, b) => b.position - a.position);
-    const coloredRoles = roles && roles.filter((r) => r.color !== 0) || [];
-    const highestColor = coloredRoles[0] && coloredRoles[0].color;
+    const highestColor = utils.getUserRoleColor(member);
 
     fields.push(
       {
@@ -371,7 +397,7 @@ class Thread {
       data.components = internalButtons;
     }
 
-    return await this.postSystemMessage(data);
+    return await this.postSystemMessage(data, true);
   }
 
   /**
@@ -566,9 +592,12 @@ class Thread {
      */
     const channel = bot.getChannel(this.channel_id);
     if (channel) {
-      if (this.isPrivate && channel.parentID == config.newThreadCategoryId) {
+      if(! this.isCT && channel.parentID == config.communityThreadCategoryId) {
+        this.addCommunityAccess();
+      }
+      if (this.isPrivate && (channel.parentID == config.newThreadCategoryId || channel.parentID == config.communityThreadCategoryId)) {
         this.makePublic();
-      } else if (! this.isPrivate && channel.parentID != config.newThreadCategoryId) {
+      } else if (! this.isPrivate && (channel.parentID != config.newThreadCategoryId && channel.parentID != config.communityThreadCategoryId)) {
         this.makePrivate();
       }
 
@@ -701,6 +730,16 @@ class Thread {
   }
 
   /**
+   * @returns {Promise<void>}
+   */
+  async addCommunityAccess() {
+    return await knex("threads")
+      .where("id", this.id)
+      .update({
+        isCT: true
+      });
+  }
+  /**
    * @param {String} userId
    * @returns {String?}
    */
@@ -732,10 +771,10 @@ class Thread {
         "429054322555355158": "203040224597508096",
         "842139696313139309": "523021576128692239"
       };
-  
+
       if (adminOverrides[categoryID]) {
         const role = guild && guild.roles && guild.roles.get(adminOverrides[categoryID]);
-  
+
         if (role) {
           return role;
         }

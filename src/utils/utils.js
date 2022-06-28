@@ -4,6 +4,7 @@ const publicIp = require("public-ip");
 const bot = require("../bot");
 const config = require("../config");
 const attachments = require("../data/attachments");
+const constants = require("./constants");
 
 class BotError extends Error {}
 
@@ -106,6 +107,17 @@ function isStaff(member) {
 }
 
 /**
+ * Returns whether the given member has permission to use some specific modmail commands
+ * @param {Eris.Member} member
+ * @returns {boolean}
+ */
+function isCommunityTeam(member) {
+  if (! config.inboxCTRoleIDs.length) return true;
+  if (! member) return false;
+  return member.roles.some((r) => config.inboxCTRoleIDs.includes(r));
+}
+
+/**
  * Returns whether the given message is on the inbox server
  * @param {Eris.Message} msg
  * @returns {Promise<boolean>}
@@ -158,6 +170,19 @@ function getUserMention(str) {
   }
 
   return null;
+}
+
+/**
+ * Returns the color of the members' highest role which has a color
+ * @param {Eris.Member} member
+ */
+function getUserRoleColor(member) {
+  if (! member || ! member.roles) return 0;
+
+  const roles = member.roles.map((r) => member.guild.roles.get(r)).sort((a, b) => b.position - a.position) || [];
+  const colored = roles.filter((r) => r.color !== 0) || [];
+
+  return colored[0] && colored[0].color;
 }
 
 /**
@@ -256,17 +281,21 @@ function getInboxMention() {
   else return `<@&${config.mentionRole}> `;
 }
 
+function awaitPostSystemMessageWithFallback(channel, thread, text) {
+  if (thread) {
+    return thread.postSystemMessage(text);
+  } else {
+    return bot.createMessage(channel.id, text);
+  }
+}
+
 /**
  * @param {Eris.GuildTextableChannel} channel
  * @param {import('./data/Thread')} thread
  * @param {Eris.MessageContent} text
  */
 function postSystemMessageWithFallback(channel, thread, text) {
-  if (thread) {
-    thread.postSystemMessage(text);
-  } else {
-    bot.createMessage(channel.id, text);
-  }
+  awaitPostSystemMessageWithFallback(channel, thread, text);
 }
 
 /**
@@ -317,6 +346,43 @@ function paginate(items, nPerPage) {
   return chunks;
 }
 
+/**
+ * @param {String} text
+ */
+async function parseText(text) { // TODO Prevent circular references. Current setup is fine for now as nested inline snippets is not currently possible
+  const matches = text.match(constants.INLINE_SNIPPET_REGEX); // Get text that should be converted
+  if (! matches) return text;
+
+  const fetched = await Promise.all(
+    matches
+      .filter((v, i, a) => a.indexOf(v) === i) // Remove duplicates
+      .map(async (m) => {
+        const ret =  {
+          word: m.replace(constants.REMOVE_INLINE_BRACKETS, ""),
+          full: m
+        };
+
+        let snippet = await snippets.get(ret.word);
+        snippet = snippet && snippet.body;
+        ret.content = snippet;
+        return ret;
+      })
+  );
+
+  const noMatch = fetched.filter((s) => ! s.content);
+  if (noMatch.length) {
+    const error = new Error("UNKNOWN_SNIPPETS");
+    error.matches = noMatch.map((m) => m.word);
+    throw error;
+  }
+
+  let toReturn = text;
+  for (const s of fetched) {
+    toReturn = toReturn.replace(RegExp("(?<!\\\\)" + s.full, "g"), s.content);
+  }
+  return toReturn;
+}
+
 module.exports = {
   BotError,
 
@@ -329,18 +395,21 @@ module.exports = {
 
   isAdmin,
   isStaff,
+  isCommunityTeam,
   messageIsOnInboxServer,
   messageIsOnMainServer,
 
   formatAttachment,
 
   getUserMention,
+  getUserRoleColor,
   getTimestamp,
   disableLinkPreviews,
   getSelfUrl,
   convertDelayStringToMS,
   getInboxMention,
   postSystemMessageWithFallback,
+  awaitPostSystemMessageWithFallback,
 
   chunk,
   trimAll,
@@ -349,5 +418,8 @@ module.exports = {
 
   regEscape,
   discordURL,
-  paginate
+  paginate,
+  parseText
 };
+
+const snippets = require("../data/snippets");
