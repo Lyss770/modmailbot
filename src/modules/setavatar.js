@@ -1,7 +1,7 @@
 const Eris = require("eris");
 const superagent = require("superagent");
 
-const VALIDATE_IMG = /^http(s)?:\/\/[\w.-]+(?:\.[\w.-]+)+[\w\-._~:/?#[\]@!$&'()*+,;=.]+\.(?:png|jpg|gif|webp)$/;
+const VALIDATE_IMG = /^http(?:s):\/\/([\w@:%.+~#=-]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-\w()@:%+.~#&/=]*)(?:\?([-\w()@:%+.~#&/=]*))?$/;
 
 /**
  * @param {Eris.CommandClient} bot
