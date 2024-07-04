@@ -29,7 +29,7 @@ module.exports = {
     if (! thread) throw new Error("Unknown thread: " + message.channel.id);
 
     if (customID === "cancel") {
-      return utils.postInteractionError(interaction, "**Thread Transfer Cancelled.**", null, true);
+      return utils.postInteractionSuccess(interaction, "***Thread transfer cancelled***", null, false);
     }
 
     if (customID === "modmail") {
@@ -41,10 +41,13 @@ module.exports = {
         return utils.postInteractionError(interaction, `This thread is already in ${targetCategory.name}.`, null, true);
       }
       return threads.moveThread(thread, targetCategory, false)
-        .catch((e) => {
-          utils.handleError(e);
-          utils.postInteractionError(interaction, "Something went wrong while attempting to move this thread.", null, true);
-        });
+        .then(
+          () => utils.postInteractionSuccess(interaction, "***Thread has been moved to ModMail***", null, false),
+          (e) => {
+            utils.handleError(e);
+            utils.postInteractionError(interaction, `Something went wrong. ${e.message}`, null, true);
+          }
+        );
     } else if (customID === "community") {
       const targetCategory = message.channel.guild.channels.get(config.communityThreadCategoryId);
       if (! targetCategory) {
@@ -54,10 +57,29 @@ module.exports = {
         return utils.postInteractionError(interaction, `This thread is already in ${targetCategory.name}.`, null, true);
       }
       return threads.moveThread(thread, targetCategory, false)
-        .catch((e) => {
-          utils.handleError(e);
-          utils.postInteractionError(interaction, "Something went wrong while attempting to move this thread.", null, true);
-        });
+        .then(
+          () => utils.postInteractionSuccess(interaction, "***Thread has been moved to community***", null, false),
+          (e) => {
+            utils.handleError(e);
+            utils.postInteractionError(interaction, `Something went wrong. ${e.message}`, null, true);
+          }
+        );
+    } else if (customID === "support") {
+      const targetCategory = message.channel.guild.channels.get(config.supportThreadCategoryId);
+      if (! targetCategory) {
+        return utils.postInteractionError(interaction, `I can't move this thread to ${customID.toLowerCase()} because it doesn't exist.`);
+      }
+      if (message.channel.parentID === targetCategory.id) {
+        return utils.postInteractionError(interaction, `This thread is already in ${targetCategory.name}.`, null, true);
+      }
+      return threads.moveThread(thread, targetCategory, false)
+        .then(
+          () => utils.postInteractionSuccess(interaction, "***Thread has been moved to support***", null, false),
+          (e) => {
+            utils.handleError(e);
+            utils.postInteractionError(interaction, `Something went wrong. ${e.message}`, null, true);
+          }
+        );
     }
     else {
       const shouldPing = customID.endsWith("-ping");
@@ -79,10 +101,13 @@ module.exports = {
       }
 
       return threads.moveThread(thread, targetCategory, shouldPing ? category.role : [])
-        .catch((e) => {
-          utils.handleError(e);
-          utils.postInteractionError(interaction, "Something went wrong while attempting to move this thread.", null, true);
-        });
+        .then(
+          () => utils.postInteractionSuccess(interaction, `***Thread has been moved to ${targetCategory.name}***`, null, false),
+          (e) => {
+            utils.handleError(e);
+            utils.postInteractionError(interaction, `Something went wrong. ${e.message}`, null, true);
+          }
+        );
     }
   }
 };
