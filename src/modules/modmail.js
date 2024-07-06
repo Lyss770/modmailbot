@@ -60,12 +60,10 @@ module.exports = bot => {
     else {
       return utils.sendError(msg, "Allowed options are `enable` or `disable`");
     }
-
-    bot.registerCommandAlias("ignoremodmail", "modmail");
   }, {
     requirements: {
       custom: (msg) => msg.member.roles.some((r) => ["203040224597508096", "987377218927861760", "523021576128692239"].includes(r)) // limited to Council, Senior Moderators or Developers
     }
   });
-
+  bot.registerCommandAlias("ignoremodmail", "modmail");
 };
