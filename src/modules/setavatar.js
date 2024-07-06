@@ -15,6 +15,7 @@ module.exports = bot => {
     try {
       response = await superagent.get(url).accept("image/*").responseType("arraybuffer");
     } catch (error) {
+      utils.handleError(error);
       if (error.response) { // Server responded with error
         return utils.sendError(msg, `Server responded with: ${error.status} ${error.message}\n${error.response.text || ""}`);
       } // Something happened with request
