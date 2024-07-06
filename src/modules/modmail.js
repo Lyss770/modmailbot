@@ -43,8 +43,7 @@ module.exports = bot => {
       } catch (err) {
         return utils.sendError(msg, err.message);
       }
-    }
-    if (toggle === "disable") {
+    } else if (toggle === "disable") {
       try {
         await disableModmail();
         bot.editStatus("dnd", {
