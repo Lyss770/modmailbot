@@ -57,6 +57,9 @@ module.exports = bot => {
         return utils.sendError(msg, err.message);
       }
     }
+    else {
+      return utils.sendError(msg, "Allowed options are `enable` or `disable`");
+    }
 
     bot.registerCommandAlias("ignoremodmail", "modmail");
   }, {
