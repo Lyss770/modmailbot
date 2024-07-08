@@ -144,11 +144,12 @@ bot.on("messageCreate", async msg => {
   if (msg.author.bot || ! (msg.type === 0 || msg.type === 19)) return; // Ignore bots & everything that isn't an actual message
   if (msg.guildID) return; // Ignore messages sent to a guild
 
+  const thread = await threads.findOpenThreadByUserId(msg.author.id);
   const isBlocked = await blocked.isBlocked(msg.author.id);
   const isDisabled = await snippet.get("isDisabled");
 
   if (isBlocked) return;
-  if (isDisabled && isDisabled.body.toLowerCase().includes("disabled")) {
+  if (! thread && isDisabled && isDisabled.body.toLowerCase().includes("disabled")) {
     let disabledSnippet = await snippet.get("disabled");
     let disabledMessage = disabledSnippet ? disabledSnippet.body : "ModMail is currently unavailable while the server is closed.\n If there is an outage please check <#535189342898094081> for updates.";
     return utils.sendInfo(msg, disabledMessage);
@@ -158,7 +159,6 @@ bot.on("messageCreate", async msg => {
   // Private message handling is queued so e.g. multiple message in quick succession don't result in multiple channels being created
 
   messageQueue.add(async () => {
-    let thread = await threads.findOpenThreadByUserId(msg.author.id);
 
     // New thread
     if (! thread) {
