@@ -25,7 +25,7 @@ module.exports = bot => {
   }
 
   bot.registerCommand("modmail", async (msg, args) => {
-    if (! utils.isAdmin(msg.member) || ! msg.member.roles.includes("987377218927861760")) return;
+    if (! utils.isAdmin(msg.member) && ! msg.member.roles.includes("987377218927861760")) return;
     const snippet = await snippets.get("isDisabled");
     if (! snippet) await snippets.add("isDisabled", "enabled", true, bot.user.id);
     if (! args[0]) return utils.sendInfo(msg, `Modmail is currently: ${snippet.body}`);
