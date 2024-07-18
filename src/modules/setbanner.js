@@ -22,16 +22,10 @@ module.exports = bot => {
       return utils.sendError(msg, "Unable to send request: " + error.message);
     }
     const newbanner = `data:${response.headers["content-type"]};base64,${response.body.toString("base64")}`;
-    superagent.patch("https://discord.com/api/users/@me")
-      .set("Authorization", `Bot ${config.token}`)
-      .set("Content-Type", "application/json")
-      .send({
-        "banner": newbanner
-      })
-      .then(
-        () => utils.sendSuccess(msg, "Successfully changed banner"),
-        (e) => utils.sendError(msg, "Unable to change banner: " + e)
-      );
+    return bot.editSelf({ banner: newbanner }).then(
+      () => utils.sendSuccess(msg, "Successfully changed banner"),
+      (e) => utils.sendError(msg, "Unable to change banner: " + e)
+    );
   }, {
     requirements: { // TODO Check if promisable void
       custom: (msg) => msg.member.roles.some((r) => ["203040224597508096", "523021576128692239"].includes(r))
