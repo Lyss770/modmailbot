@@ -35,6 +35,7 @@ const exec = require("./modules/exec");
 const restart = require("./modules/restart");
 const info = require("./modules/info");
 const setavatar = require("./modules/setavatar");
+const setbanner = require("./modules/setbanner");
 const dmlink = require("./modules/dmlink");
 const stats = require("./modules/stats");
 const say = require("./modules/say");
@@ -509,6 +510,7 @@ module.exports = {
     restart(bot);
     info(bot);
     setavatar(bot);
+    setbanner(bot);
     dmlink(bot);
     stats(bot);
     say(bot);
