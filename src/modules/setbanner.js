@@ -34,7 +34,7 @@ module.exports = bot => {
       );
   }, {
     requirements: { // TODO Check if promisable void
-      custom: (msg) => msg.member.roles.some((r) => ["203040224597508096", "523021576128692239", "851353808785244160"].includes(r))
+      custom: (msg) => msg.member.roles.some((r) => ["203040224597508096", "523021576128692239"].includes(r))
     }
   });
 
