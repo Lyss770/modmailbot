@@ -1,7 +1,6 @@
 const Eris = require("eris");
 const superagent = require("superagent");
 const utils = require("../utils/utils");
-const config = require("../config");
 
 const VALIDATE_IMG = /^http(?:s):\/\/([\w@:%.+~#=-]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-\w()@:%+.~#&/=]*)(?:\?([-\w()@:%+.~#&/=]*))?$/;
 
